@@ -1,0 +1,121 @@
+// Include files for required libraries
+#include <stdio.h>
+ 
+ 
+#include "opencv_aee.hpp"
+#include "main.hpp"     // You can use this file for declaring defined values and functions
+#include "pi2c.h"
+using namespace std;
+using namespace cv;
+Pi2c car(0x22); // Configure the I2C interface to the Car as a global variable
+void setup(void)
+{
+    setupCamera(320, 240);  // Enable the camera for OpenCV
+}
+ 
+int main( int argc, char** argv )
+{
+    setup();    // Call a setup function to prepare IO and devices
+ 
+    namedWindow("Photo");   // Create a GUI window called photo
+    
+    //Intalises PID constants
+    float kp =70;
+    float ki =1.2;
+    float kd =1.3;
+ 
+    float setpoint=0;
+    float error=0;
+    float previouserror=0;
+    float totalerror=0;
+    float u=0;
+ 
+    int servoangle=90;
+    int centreangle=80;
+ 
+    while(1)    // Main loop to perform image processing
+    {
+        Mat frame;
+        Mat frame_GREY;
+        Mat frame_HSV;
+        Mat hold;
+        int start;
+        int finish;
+        int16_t leftmotor =90;
+        int16_t rightmotor=90;
+        while(frame.empty())
+            frame = captureFrame(); // Capture a frame from the camera and store in a new matrix variable
+            cvtColor(frame, frame_HSV, COLOR_BGR2HSV); // Convert the image to HSV
+        inRange(frame_HSV, Scalar(0, 0, 0), Scalar(180, 102, 64), frame_GREY);//Isolates Black pixels in the frame
+        frame_GREY=frame_GREY(Rect(0,0,320,20));//Crops the frame to remove unnecessary noise
+        imshow("Photo", frame_GREY); //Display the image in the window
+ 
+        hold=frame_GREY;// Stores a copy of the frame captured in the matrix 'hold' to be analysed
+        bool intial=true; //Bool flag
+        //First bit of for loop taken from manual to read a row
+        uchar* p = hold.ptr<uchar>(20); // Reads through each pixel on row 20 of the frame
+        for(int x = 0; x <hold.cols; x++)
+        {
+ 
+            p[x]; // This is our B&W pixel data we can read it or write it
+            uchar pixel = p[x]; // read the data into pixel
+            if(pixel==255)
+            {
+                if(intial)
+                {
+                    start=x; //Stores the intial pixel number that reads the white line each time a while loop is run
+                    intial=false;// Sets boolean flag to false so for this frame this if statment can no longer be accessed
+                }
+                finish=x; // Stores the final pixel number all the way on the right that reads the line each time the while loop is run
+            }
+            else
+            {
+                //cout<<" 0 ";
+            }
+        }
+        int center = (start + finish) / 2; // Calculates the pixel number that detects the centre of the line 
+        int deviation = center - (hold.cols / 2); // Calculate deviation from the center of the frame
+        float controlSignal = static_cast<double>(deviation) / (hold.cols / 2); // Normalises deviation
+ 
+        // Print the control signal
+     /*  cout << "Control Signal: " << controlSignal << endl;
+ 
+       cout << start << " ";
+       cout << finish << " ";
+        cout << "Loop New" << endl;*/
+        
+        // Performs PID calculation
+        previouserror=error;
+        error=0.005-controlSignal; 
+        totalerror=totalerror+error;
+ 
+        u=(kp*error)+(ki*totalerror)+(kd*(error-previouserror));
+      //  cout<<" u "<<u<<endl;
+ 
+        servoangle=centreangle+u;
+ 
+ 
+        // Stores the corrected Servo angle value and constant motor speeds in an Array
+        char data[6];
+        data[0] = (leftmotor >> 8)& 0xFF;   // leftMotor_speed16_9
+        data[1] = leftmotor & 0xFF;       // leftMotor_speed8_1
+        data[2] = (rightmotor >> 8)& 0xFF;  // rightMotor_speed16_9
+        data[3] = rightmotor & 0xFF;         // rightMotor_speed8_1
+        data[4] = (servoangle >> 8) & 0xFF;        // servoAngle16_9
+        data[5] = servoangle & 0xFF;               // servoAngle8_1
+ 
+        car.i2cWrite(data, 6); // Sends the data to the Slave ESP32
+       // cout<<" I have passed through I2C"<<endl;
+ 
+ 
+        int key = cv::waitKey(1);   // Wait 1ms for a keypress (required to update windows)
+       // cout << "Servo angle: " << servoangle << endl;
+        key = (key==255) ? -1 : key;    // Check if the ESC key has been pressed
+        if (key == 27)
+            break;
+    }
+ 
+    closeCV();  // Disable the camera and close any windows
+ 
+    return 0;
+}
