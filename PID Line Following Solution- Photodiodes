@@ -1,0 +1,117 @@
+//  Code for a PID line Following solution for EEE Bot 
+//  To calibrate the sensors replace values in constrain and map functions
+ 
+ 
+ 
+#include <Wire.h>
+#define I2C_SLAVE_ADDR 0x04 // 4 in hexadecimal
+ 
+//Function to send Data from Master to Slave
+//Parameters
+//        - Left motor Speed
+//        - Right motor Speed
+//        - Servo angle 
+// Does not return a value 
+void carmovement(int16_t leftmotor, int16_t rightmotor, int16_t servoangle)
+{
+  Wire.beginTransmission(I2C_SLAVE_ADDR); 
+  Wire.write((byte)((leftmotor & 0x0000FF00) >> 8));    // first byte of x, containing bits 16 to 9
+  Wire.write((byte)(leftmotor & 0x000000FF));           // second byte of x, containing the 8 LSB - bits 8 to 1
+  Wire.write((byte)((rightmotor & 0x0000FF00) >> 8));    // first byte of y, containing bits 16 to 9
+  Wire.write((byte)(rightmotor & 0x000000FF));           // second byte of y, containing the 8 LSB - bits 8 to 1
+  Wire.write((byte)((servoangle & 0x0000FF00) >> 8));    // first byte of y, containing bits 16 to 9
+  Wire.write((byte)(servoangle & 0x000000FF));           // second byte of y, containing the 8 LSB - bits 8 to 1
+  Wire.endTransmission();   // stop transmitting
+}
+ 
+ 
+//Initalising Variables 
+ 
+int motorleft = 0; 
+int motorright = 0; 
+int servoangle = 90; 
+int centreangle=80; 
+int speedintial= 150; 
+float k=0.6; // K needs to be less than 1 change appropiately
+ 
+float setpoint=0;
+float error=0;
+float previouserror=0;
+float totalerror=0;
+float weightedaverage=0;
+float u=0;
+ 
+ 
+/* Change pin numbers dependent on EEE Bot
+ If want to use Node-RED to alter PID constants connect them to ADC1 pins on ESP32 the pins
+ These pins are shown on the flowchart as 25,33,34,39,36 and are used to alter Kp,Ki and Kd values in real time*/
+const int photodiode1=26;
+const int photodiode2=25;
+const int photodiode3=33;
+const int photodiode4=15;
+const int photodiode5=35;
+ 
+ 
+// Constants for PID calulation, can be changed dependent upon EEE Bot
+float kp=139;
+float ki=1.2;
+float kd=1.3;
+ 
+ 
+ 
+void setup()
+{
+  Serial.begin(9600);
+  Wire.begin();  
+ 
+ 
+}
+ 
+ 
+void loop()
+{
+   /*Reads values from Photodiodes on the ESP32 and assigns them to a variable that is later used in weighted average       calulation*/
+  float IR1 = analogRead(photodiode1);
+  float IR2 = analogRead(photodiode2);
+  float IR3 = analogRead(photodiode3);
+  float IR4 = analogRead(photodiode4);
+  float IR5 = analogRead(photodiode5);
+ 
+ 
+ 
+  // The following lines of code are used for sensor calibration and so are commented out as they will
+  //change dependent on surrounds. They can be uncommented if need be.  
+  /*
+  IR1= constrain(IR1,252,3378);
+  IR2= constrain(IR2,245,3636);
+  IR3= constrain(IR3,112,3701);
+  IR4= constrain(IR4,158,3378);
+  IR5= constrain(IR5,112,3749);
+ 
+  IR1=map(IR1,252,3378,0,10);
+  IR2=map(IR2,245,3636,0,10);
+  IR3=map(IR3,112,3701,0,10);
+  IR4=map(IR4,158,3378,0,10);
+  IR5=map(IR5,112,3749,0,10);*/
+ 
+ 
+  
+  weightedaverage=((IR1*2)+(IR2*1)+(IR3*0)+(IR4*-1)+(IR5*-2))/(IR1+IR2+IR3+IR4+IR5);
+  previouserror=error;
+  error = setpoint - weightedaverage;  // finds error
+  totalerror =totalerror+ error; // en to times by ki
+  
+  u=(kp*error)+(ki*totalerror)+(kd*(error-previouserror));
+ 
+ 
+  /* If you flipped the weights assigned in weighted average and made IR1 =-2 and IR2=-1 and IR4 =1 and IR5=2
+   the formula would then need to be changed to 'servoangle=centreangle-u'*/
+  servoangle = centreangle+u;
+ 
+  motorleft=speedintial+(k*u);
+  motorright=speedintial-(k*u);
+  
+  carmovement(motorleft,motorright,servoangle);// change motor speed if needed
+ 
+ 
+}
