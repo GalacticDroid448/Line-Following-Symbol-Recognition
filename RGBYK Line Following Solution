@@ -1,0 +1,328 @@
+#include <stdio.h>
+//#include <ctime.h>
+ 
+#include "opencv_aee.hpp"
+#include "main.hpp" // You can use this file for declaring defined values and functions
+#include "pi2c.h"
+ 
+using namespace cv;
+using namespace std;
+ 
+Pi2c car(0x22); // Configure the I2C interface to the Car as a global variable
+ 
+void setup(void)
+{
+    setupCamera(320, 240); // Enable the camera for OpenCV
+}
+Mat resizeimage(Mat shape,int resize_method)
+{
+    Mat resized_image;
+    resize(shape, resized_image, Size(320, 240), 0.0, 0.0, resize_method);
+ 
+    return resized_image;
+}
+Mat blackandwhite(Mat resized_image)
+{
+    Mat image_HSV;
+    Mat image_GREY;
+ 
+    cvtColor(resized_image, image_HSV, COLOR_BGR2HSV); // Convert the image to HSV
+    inRange(image_HSV, Scalar(128, 50, 50), Scalar(179, 255, 255), image_GREY);
+ 
+    return image_GREY;
+ 
+}
+ 
+// Function to send updated Servo angle along with Left and Right Motor Speeds to the Slave ESP32 from the Pi
+void I2C(int16_t leftmotor,int16_t rightmotor,int16_t servoangle)
+{
+    char data[6];
+    data[0] = (leftmotor >> 8)& 0xFF;   // leftMotor_speed16_9
+    data[1] = leftmotor & 0xFF;       // leftMotor_speed8_1
+    data[2] = (rightmotor >> 8)& 0xFF;  // rightMotor_speed16_9
+    data[3] = rightmotor & 0xFF;         // rightMotor_speed8_1
+    data[4] = (servoangle >> 8) & 0xFF;        // servoAngle16_9
+    data[5] = servoangle & 0xFF;               // servoAngle8_1
+ 
+    car.i2cWrite(data, 6);
+}
+ 
+ 
+int main(int argc, char** argv)
+{
+    setup(); // Call a setup function to prepare IO and devices
+ 
+    float kp =70;
+    float ki =1.2;
+    float kd =1.3;
+ 
+    float pinkcompare=0;
+    float linecompare=0;
+ 
+    float setpoint=0;
+    float error=0;
+    float previouserror=0;
+    float totalerror=0;
+    float u=0;
+ 
+    int servoangle=90;
+    int centreangle=80;
+ 
+    int16_t leftmotor =90;
+    int16_t rightmotor=90;
+ 
+    // Intalises HSV variables to Isolate black pixels from the black line it follows intially
+    int Hlow=0;
+    int Hhigh=180;
+    int Slow=0;
+    int Shigh=102;
+    int Vlow=0;
+    int Vhigh=64;
+ 
+ 
+   // int counter=0;
+    // const clock_t start = clock();
+    //int currentTime = 0;
+    //const int delay = 3;
+    Mat triangle;
+    Mat circle;
+    Mat star;
+    Mat umbrella;
+    Mat comparator;
+    Mat linecomparator;
+ 
+    triangle = imread("/home/B01-20/Desktop/OpenCV-Template/Triangle (Blue Line).png");
+    circle= imread("/home/B01-20/Desktop/OpenCV-Template/Circle (Red Line).png");
+    star=imread("/home/B01-20/Desktop/OpenCV-Template/Star (Green Line).png");
+    umbrella=imread("/home/B01-20/Desktop/OpenCV-Template/Umbrella (Yellow Line).png");
+    comparator=imread("/home/B01-20/Desktop/OpenCV-Template/Black_Image.png"); // Comparator image used to check of there is a symbol or line present in either of the frames
+ 
+    double orig_aspect = triangle.cols / static_cast<double>(triangle.rows);
+    double target_aspect = 320.0 / 240.0;
+    int resize_method = orig_aspect > target_aspect ? INTER_AREA : INTER_CUBIC;
+ 
+    triangle=resizeimage(triangle,resize_method);
+    circle=resizeimage(circle,resize_method);
+    star=resizeimage(star,resize_method);
+    umbrella=resizeimage(umbrella,resize_method);
+    comparator=resizeimage(comparator,resize_method); // Reizes the comparator image to the size of the frame
+ 
+ 
+    triangle= blackandwhite(triangle);
+    circle= blackandwhite(circle);
+    star= blackandwhite(star);
+    umbrella= blackandwhite(umbrella);
+    while (1)   // Main loop to perform image processing
+    {
+ 
+        Mat frame;
+        Mat frame_HSV;
+        Mat frame_BLACK;
+        Mat frame_PINK;
+ 
+ 
+ 
+        Mat storetransform;
+ 
+        int start;
+        int finish;
+        while (frame.empty())
+            frame = captureFrame(); // Capture a frame from the camera and store in a new matrix variable
+        //imshow("Frame",frame);
+ 
+        cvtColor(frame, frame_HSV, COLOR_BGR2HSV);
+        inRange(frame_HSV, Scalar(128, 25, 15), Scalar(179, 255, 255), frame_PINK);//Detects pink from the symbol and stores it in another matrix frame_PINK
+        //HSV values are set as variables here for different line colours
+        inRange(frame_HSV, Scalar(Hlow, Slow, Vlow), Scalar(Hhigh, Shigh, Vhigh), frame_BLACK);//Detects black line and stores it in matrix frame_BLACK
+        inRange(frame_HSV, Scalar(0, 0, 0), Scalar(180, 0, 0), comparator);
+ 
+        //Crops the frames
+        frame_BLACK=frame_BLACK(Rect(0,0,320,20));
+        frame_PINK=frame_PINK(Rect(0,0,320,160));
+        comparator=comparator(Rect(0,0,320,160));
+        linecomparator=comparator(Rect(0,0,320,20));
+ 
+        Mat spotFilter = cv::getStructuringElement(MORPH_ELLIPSE, Size(5, 5));
+        cv::erode(comparator, comparator, spotFilter);
+ 
+        pinkcompare=compareImages(comparator,frame_PINK);
+ 
+        // checks if there is enough pink in the symbol frame to run Symbol detection
+        if(pinkcompare<75)//edit value
+        {
+            // Stop the car
+            // send data via I2C
+            I2C(0,0,servoangle);
+ 
+            cout<<"Stopped to detect the symbol"<<endl;
+ 
+            vector<vector<Point>> contours;
+            vector<Vec4i> hierarchy;
+ 
+            findContours(frame_PINK, contours, hierarchy, RETR_TREE, CHAIN_APPROX_SIMPLE, Point(0, 0)); // Calculate the contours and store them
+ 
+            vector<vector<Point>> approxedcontours(contours.size());
+ 
+            for (int i = 0; i < contours.size(); i++)
+            {
+                approxPolyDP(contours[i], approxedcontours[i], 10, true);
+                //drawContours(frame, approxedcontours, (int)i, Scalar(255, 0, 0), 2, LINE_8, noArray(), 0, Point());
+ 
+                if (approxedcontours[i].size()==4)
+                {
+                    Mat transformed = transformPerspective(approxedcontours[0], frame_PINK, 320, 240);
+ 
+                    if(!transformed.empty())
+                    {
+                        cout<<"Hi"<<endl;
+                        //imshow("Transformed",transformed);
+                        rotate(transformed,transformed,ROTATE_180);
+                        Mat maskMorph = cv::getStructuringElement(MORPH_RECT, Size(10, 10));
+                        cv::dilate(transformed, transformed, maskMorph);
+                        storetransform=transformed;
+                        cout<<"Stored transformed"<<endl;
+                    }
+                }
+ 
+            }
+            float match = compareImages(storetransform,triangle);
+            float match1= compareImages(storetransform,circle);
+            float match2=compareImages(storetransform,star);
+            float match3=compareImages(storetransform,umbrella);
+            //imshow("Triangle",triangle);
+ 
+            if((match1<match)&&(match>5)&&(match2<match)&&(match3<match))
+            {
+                //Changes HSV values in frame_BLACK to detect a different coloured line based on Symbol detected
+                cout<<"Triangle"<<endl;
+                Hlow=96;
+                Hhigh=115;
+                Slow=142;
+                Shigh=255;
+                Vlow=23;
+                Vhigh=255;
+                cout<<"Following Blue"<<endl;
+                /*for(int i=0;i<10001;i++)
+                {
+                    cout<<i<<endl;
+ 
+                }*/
+                //sleep(5);
+            }
+            else if((match1>match)&&(match1>5)&&(match2<match1)&&(match3<match1))
+            {
+                cout<<"Circle"<<endl;
+                Hlow=169;
+                Hhigh=179;
+                Slow=0;
+                Shigh=255;
+                Vlow=0;
+                Vhigh=255;
+ 
+            }
+            else if((match2>5)&&(match2>match1)&&(match2>match)&&(match3<match2))
+            {
+                cout<<"Star"<<endl;
+                Hlow=75;
+                Hhigh=81;
+                Slow=193;
+                Shigh=255;
+                Vlow=74;
+                Vhigh=255;
+            }
+            else if((match3>5)&&(match3>match1)&&(match3>match)&&(match2<match3))
+            {
+                cout<<"umbrella"<<endl;//values for yellow still need to be edited
+                Hlow=128;
+                Hhigh=179;
+                Slow=0;
+                Shigh=255;
+                Vlow=0;
+                Vhigh=130;
+            }
+            else if((match1<5)&&(match<5)&&(match2<5)&&(match3<5))
+            {
+                cout<<"No shape detected"<<endl;
+            }
+            //  currentTime = clock();
+        }
+        /*if(pinkcompare>75)
+        pinkcompare=20;*/
+        do
+        {
+ 
+ 
+            bool intial=true; //Bool flag
+            //First bit of for loop taken from manual to read a row
+            uchar* p = frame_BLACK.ptr<uchar>(20);
+            for(int x = 0; x <frame_BLACK.cols; x++)
+            {
+ 
+                p[x]; // This is our B&W pixel data we can read it or write it
+                uchar pixel = p[x]; // read the data into pixel
+                if(pixel==255)
+                {
+                    if(intial)
+                    {
+                        start=x; //Stores the intial pixel number that reads the white line each time a while loop is run
+                        intial=false;
+                    }
+                    finish=x; // Stores the final pixel number all the way on the right that reads the line each time the while loop is run
+                }
+                else
+                {
+                    //cout<<" 0 ";
+                }
+            }
+            int center = (start + finish) / 2;
+            int deviation = center - (frame_BLACK.cols / 2); // Calculate deviation from the center of the frame
+            float controlSignal = static_cast<double>(deviation) / (frame_BLACK.cols / 2); // Normalize deviation
+ 
+            previouserror=error;
+            error=0.005-controlSignal;
+            totalerror=totalerror+error;
+ 
+            u=(kp*error);
+            servoangle=centreangle+u;
+ 
+            //send data via I2C
+            cout<<"Servo angle: "<<servoangle<<endl;
+ 
+            I2C(90,90,servoangle);
+            linecompare=compareImages(linecomparator,frame_BLACK);
+            printf("Line compare \t: %f",linecompare);
+            
+            // If the line no longer appears in the line following frame it means it is no longer present so Pi switches back to following black
+            if(linecompare==100)
+            {
+ 
+                cout<<"Lost the line- switching to black"<<endl;
+                Hlow=0;
+                Hhigh=180;
+                Slow=0;
+                Shigh=102;
+                Vlow=0;
+                Vhigh=64;
+ 
+            }
+ 
+        }
+        while(linecompare<20);// Continuously runs line following while a line is present in the frame
+ 
+        imshow("Linefollow",frame_BLACK);
+        imshow("Symbol detection",frame_PINK);
+ 
+ 
+ 
+ 
+        int key = waitKey(1); // Wait 1ms for a keypress (required to update windows)
+ 
+        key = (key == 255) ? -1 : key; // Check if the ESC key has been pressed
+        if (key == 27)
+            break;
+    }
+ 
+    closeCV(); // Disable the camera and close any windows
+ 
+    return 0;
+}
