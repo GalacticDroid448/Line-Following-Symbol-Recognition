@@ -1,0 +1,69 @@
+#include <stdio.h>
+#include <iostream>
+#include "opencv2/core.hpp"
+#include "opencv2/highgui.hpp"
+#include "opencv2/imgproc.hpp"
+ 
+using namespace cv;
+using namespace std;
+ 
+int main()
+{
+  // namedWindow("Colour dominant in the Image:");
+ 
+  Mat BitwiseImage;
+  Mat inputImage = imread("RedApple.bmp"); // Image is read in
+  string dominantColour;
+    
+  if (inputImage.empty())
+  {
+    cout<< "Can't find the image" <<endl;
+    return -1;
+  }
+ 
+  Mat imageInHSV;
+  cvtColor(inputImage, imageInHSV, COLOR_BGR2HSV);
+ 
+  // Different grayscale images  are created isolating RED/GREEN and BLUE pixels
+  Mat blueColourMask, greenColourMask, redColourMaskLow, redColourMaskHigh;
+  inRange(imageInHSV, Scalar(100, 50, 50), Scalar(140, 255, 255), blueColourMask);
+  inRange(imageInHSV, Scalar(35, 70, 50), Scalar(85, 255, 255), greenColourMask);
+  inRange(imageInHSV, Scalar(0, 50, 50), Scalar(10, 255, 255), redColourMaskLow);
+  inRange(imageInHSV, Scalar(170, 50, 50), Scalar(179, 255, 255), redColourMaskHigh);
+ 
+  // Number of corresponding pixels of each colour are counted in each mask
+  int bluePixelCount = countNonZero(blueColourMask);
+  int greenPixelCount = countNonZero(greenColourMask);
+  int redPixelCountLow = countNonZero(redColourMaskLow);
+  int redPixelCountHigh = countNonZero(redColourMaskHigh);
+  int totalRedPixelCount = redPixelCountLow + redPixelCountHigh;
+ 
+  
+  //Mask with the most pixels that aren't zero is the dominant colour
+  if (bluePixelCount >= greenPixelCount && bluePixelCount >= totalRedPixelCount)
+  {
+    dominantColour = "Blue";
+    bitwise_and(inputImage, inputImage, BitwiseImage, blueColourMask);
+  }
+  else if (greenPixelCount >= bluePixelCount && greenPixelCount >= totalRedPixelCount)
+  {
+    dominantColour = "Green";
+    bitwise_and(inputImage, inputImage, BitwiseImage, greenColourMask);
+  }
+  else
+  {
+    dominantColour = "Red";
+    bitwise_or(redColourMaskLow, redColourMaskHigh, redColourMaskLow);
+    bitwise_and(inputImage, inputImage, BitwiseImage, redColourMaskLow);
+  }
+ 
+  cout << "Colour Dominant: " << dominantColour <<endl;
+ 
+  imshow("Dominant Colour", inputImage);
+  imshow("Bitwise Operation Performed", BitwiseImage);
+ 
+  waitKey(0);
+  destroyAllWindows();
+ 
+  return 0;
+}
