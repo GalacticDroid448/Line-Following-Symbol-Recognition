@@ -1,0 +1,167 @@
+#include <stdio.h>
+ 
+#include "opencv_aee.hpp"
+#include "main.hpp" // You can use this file for declaring defined values and functions
+#include "pi2c.h"
+ 
+using namespace cv;
+using namespace std;
+ 
+Pi2c car(0x22); // Configure the I2C interface to the Car as a global variable
+ 
+void setup(void) {
+  setupCamera(320, 240); // Enable the camera for OpenCV
+}
+//Resizes the Symbol files stored in memory intially
+// Inputs
+//      - The symbol and whether the shape is to be enlarged or shrunk
+// Returns a matrix which is the resized shape in 320 by 240 format
+Mat resizeimage(Mat shape,int resize_method)
+{
+    Mat resized_image;
+    resize(shape, resized_image, Size(320, 240), 0.0, 0.0, resize_method);
+ 
+    return resized_image;
+}
+ 
+// Converts the Resized Symbol file to now a black and white image
+// Inputs 
+//          - The resized Symbol file
+// Returns a matrix representing the image in grayscale
+Mat blackandwhite(Mat resized_image)
+{
+    Mat image_HSV;
+    Mat image_GREY;
+ 
+    cvtColor(resized_image, image_HSV, COLOR_BGR2HSV); // Convert the image to HSV
+    inRange(image_HSV, Scalar(128, 50, 50), Scalar(179, 255 , 255), image_GREY); // Isolates the purple pixels of the Symbol
+ 
+    return image_GREY;
+ 
+}
+ 
+int main(int argc, char** argv) {
+  setup(); // Call a setup function to prepare IO and devices
+ 
+  cv::namedWindow("Approximated Contours");
+  cv::namedWindow("Original Image");
+ 
+ 
+  while (1) { // Main loop to perform image processing
+    Mat frame;
+    Mat frame_HSV;
+    Mat frame_GREY;
+ 
+    Mat triangle;
+    Mat circle;
+    Mat star;
+    Mat umbrella;
+ 
+    Mat storetransform;
+    while (frame.empty())
+      frame = captureFrame(); // Capture a frame from the camera and store in a new matrix variable
+ 
+    // Reads in the Symbol Files  
+    triangle = imread("/home/B01-20/Desktop/OpenCV-Template/Triangle (Blue Line).png");
+    circle= imread("/home/B01-20/Desktop/OpenCV-Template/Circle (Red Line).png");
+    star=imread("/home/B01-20/Desktop/OpenCV-Template/Star (Green Line).png");
+    umbrella=imread("/home/B01-20/Desktop/OpenCV-Template/Umbrella (Yellow Line).png");
+ 
+    // Determines whether the  Symbol files need to be enlarged or shrunk according to the current and target aspect ratio  
+    double orig_aspect = triangle.cols / static_cast<double>(triangle.rows);
+    double target_aspect = 320.0 / 240.0;
+    int resize_method = orig_aspect > target_aspect ? INTER_AREA : INTER_CUBIC;
+ 
+    // Calls function to resize the Symbol files  
+    triangle=resizeimage(triangle,resize_method);
+    circle=resizeimage(circle,resize_method);
+    star=resizeimage(star,resize_method);
+    umbrella=resizeimage(umbrella,resize_method);
+ 
+    // Calls function to convert Symbol files to grayscale 
+    triangle= blackandwhite(triangle);
+    circle= blackandwhite(circle);
+    star= blackandwhite(star);
+    umbrella= blackandwhite(umbrella);
+ 
+    cvtColor(frame, frame_HSV, COLOR_BGR2HSV);
+    inRange(frame_HSV, Scalar(128, 25, 15), Scalar(179, 255, 255), frame_GREY); // Isolates the purple pixels in the frame
+ 
+    // Vectors created to store the contours  
+    vector<vector<Point>> contours;
+    vector<Vec4i> hierarchy;
+ 
+    findContours(frame_GREY, contours, hierarchy, RETR_TREE, CHAIN_APPROX_SIMPLE, Point(0, 0)); // Calculate the contours and store them
+ 
+    vector<vector<Point>> approxedcontours(contours.size());
+ 
+    for (int i = 0; i < contours.size(); i++)
+    {
+      approxPolyDP(contours[i], approxedcontours[i], 10, true); //Finds the approximated contours from the countours
+      drawContours(frame, approxedcontours, (int)i, Scalar(255, 0, 0), 2, LINE_8, noArray(), 0, Point()); // Draws contours onto frame
+ 
+      if (approxedcontours[i].size()==4)    // Transforms the image if all 4 corners of the Symbol can be seen
+      {
+        Mat transformed = transformPerspective(approxedcontours[0], frame_GREY, 320, 240); // Symbol is transformed to a 320 by 240 frame
+ 
+          if(!transformed.empty())
+          {
+            imshow("Transformed",transformed);
+            rotate(transformed,transformed,ROTATE_180);  // Camera is upside down so Symbol needs to be rotated
+             
+            // Dilates the transformed Symbol to accentuate its features so a Star can be told apart from a circle  
+            Mat maskMorph = cv::getStructuringElement(MORPH_RECT, Size(10, 10));
+            cv::dilate(transformed, transformed, maskMorph);
+            storetransform=transformed;
+          }
+      }
+ 
+    }
+ 
+ 
+    imshow("Approximated Contours", frame);
+    imshow("Original Image", frame_GREY);
+      
+      
+    // Compares the similarity of the Symbol in the frame that has been transformed to all Symbol files in memory
+    float match = compareImages(storetransform,triangle);
+    float match1= compareImages(storetransform,circle);
+    float match2=compareImages(storetransform,star);
+    float match3=compareImages(storetransform,umbrella);
+ 
+    //Checks which Symbol file the frame matches  
+       if((match1<match)&&(match>5)&&(match2<match)&&(match3<match))
+    {
+        cout<<"Triangle"<<endl;
+    }
+    else if((match1>match)&&(match1>5)&&(match2<match1)&&(match3<match1))
+    {
+        cout<<"Circle"<<endl;
+    }
+    else if((match2>5)&&(match2>match1)&&(match2>match)&&(match3<match2))
+    {
+        cout<<"Star"<<endl;
+    }
+        else if((match3>5)&&(match3>match1)&&(match3>match)&&(match2<match3))
+    {
+        cout<<"umbrella"<<endl;
+    }
+    else if((match1<5)&&(match<5)&&(match2<5)&&(match3<5))
+    {
+        cout<<"No shape detected"<<endl;
+    }
+ 
+ 
+cout<<"End of if "<<endl;
+ 
+    int key = waitKey(1); // Wait 1ms for a keypress (required to update windows)
+ 
+    key = (key == 255) ? -1 : key; // Check if the ESC key has been pressed
+    if (key == 27)
+      break;
+  }
+ 
+  closeCV(); // Disable the camera and close any windows
+ 
+  return 0;
+}
